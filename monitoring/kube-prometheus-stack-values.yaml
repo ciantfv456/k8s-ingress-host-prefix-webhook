@@ -1,0 +1,34 @@
+# Values for `helm install kube-prometheus-stack
+# prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+# -f monitoring/kube-prometheus-stack-values.yaml` (see HANDOFF.md for the
+# full install order).
+#
+# Trimmed to just what this feature needs: Prometheus (to scrape the
+# webhook's ServiceMonitor) and Grafana (as the external instance
+# grafana-operator points at, see grafana-instance.yaml) - alertmanager,
+# node-exporter, and kube-state-metrics are disabled since nothing here
+# depends on them, keeping the install lighter for a dev/validation cluster.
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: false
+grafana:
+  enabled: true
+crds:
+  enabled: true
+prometheus:
+  prometheusSpec:
+    # Without this, the chart's own Helm-managed serviceMonitorSelector
+    # (matching only ServiceMonitors carrying this release's own labels)
+    # takes effect, and the webhook chart's ServiceMonitor
+    # (chart/templates/servicemonitor.yaml, a separate Helm
+    # release/chart) would never be picked up. Setting
+    # serviceMonitorSelectorNilUsesHelmValues: false plus empty
+    # selectors below makes Prometheus watch ALL ServiceMonitors in ALL
+    # namespaces, which is what lets the webhook's ServiceMonitor (in
+    # its own release/namespace) get discovered.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}

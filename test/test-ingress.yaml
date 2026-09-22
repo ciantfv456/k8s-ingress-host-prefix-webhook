@@ -1,0 +1,56 @@
+# Test fixtures for the ingress-host-prefix-webhook.
+#
+# The Service backend intentionally has no matching Pods (selector matches
+# nothing) - the Kubernetes API server does not validate that an Ingress's
+# backend Service exists or has endpoints, so this is enough to exercise the
+# webhook without needing a running workload.
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-backend
+  namespace: default
+spec:
+  selector:
+    app: does-not-exist
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress
+  namespace: default
+spec:
+  ingressClassName: traefik
+  # secretName is made up and does not need to reference a real Secret -
+  # Ingress admission does not validate that it exists. Only myapp.example.com
+  # is listed here (deliberately, not second.example.com) so the webhook test
+  # can confirm: myapp.example.com's TLS entry gets prefixed-myapp.example.com
+  # appended to its hosts, while second.example.com (no matching TLS entry)
+  # gets no TLS mutation at all.
+  tls:
+    - secretName: fake-tls-secret
+      hosts:
+        - myapp.example.com
+  rules:
+    - host: myapp.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-backend
+                port:
+                  number: 80
+    - host: second.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-backend
+                port:
+                  number: 80

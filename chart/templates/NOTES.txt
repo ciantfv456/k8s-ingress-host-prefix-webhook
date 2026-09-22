@@ -1,0 +1,17 @@
+ingress-host-prefix-webhook installed into namespace {{ .Release.Namespace }}.
+
+Deployment: {{ include "ihpw.fullname" . }}
+Service:    {{ include "ihpw.fullname" . }} (port {{ .Values.service.port }} -> {{ .Values.service.targetPort }})
+Webhook:    MutatingWebhookConfiguration/{{ include "ihpw.fullname" . }}
+TLS secret: {{ include "ihpw.tlsSecretName" . }}
+
+Every Ingress CREATE/UPDATE in namespaces other than kube-system and
+{{ .Release.Namespace }} will get one extra spec.rules entry per existing
+rule with a non-empty host, prefixed with {{ .Values.hostPrefix | quote }}.
+
+Check pod status:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Apply a test Ingress and inspect the mutated rules:
+  kubectl apply -f test/test-ingress.yaml
+  kubectl get ingress test-ingress -o yaml

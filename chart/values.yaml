@@ -1,0 +1,116 @@
+# Default values for ingress-host-prefix-webhook.
+
+# hostPrefix is prepended directly to each Ingress rule's host to produce an
+# additional duplicated rule, e.g. "prefixed-" + "myapp.example.com" ->
+# "prefixed-myapp.example.com". Passed to the webhook container as the
+# HOST_PREFIX env var.
+hostPrefix: "prefixed-"
+
+replicaCount: 1
+
+image:
+  repository: ingress-host-prefix-webhook
+  # Left empty to default to the chart's appVersion (see Chart.yaml). Set
+  # explicitly (e.g. --set image.tag=dev) to override.
+  tag: ""
+  # Local-only image built with `docker build` on the node/host running the
+  # cluster; it is not pushed to any registry, so it must already be present
+  # wherever the pod gets scheduled. pullPolicy Never tells kubelet to use
+  # only what's local instead of trying (and failing) to pull it.
+  pullPolicy: Never
+
+# failurePolicy controls what happens to Ingress writes if the webhook is
+# unreachable/erroring. "Ignore" is safer for initial rollout/testing (an
+# unreachable webhook just means Ingresses go through unmutated). Flip to
+# "Fail" once you trust the webhook is reliably up.
+failurePolicy: Ignore
+
+service:
+  port: 443
+  targetPort: 8443
+
+webhook:
+  # Path the API server POSTs AdmissionReview requests to.
+  path: /mutate
+  timeoutSeconds: 5
+  # ["CREATE", "UPDATE"] - which Ingress writes trigger mutation.
+  operations:
+    - CREATE
+    - UPDATE
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+metrics:
+  # Exposes /metrics (Prometheus text format) on a separate plain-HTTP
+  # container port (metrics.port, default 8080) alongside the existing TLS
+  # admission listener on :8443. Controls the metrics containerPort/Service
+  # port, the ServiceMonitor, and (in combination with networkPolicy.enabled
+  # / ciliumNetworkPolicy.enabled) the extra NetworkPolicy/CiliumNetworkPolicy
+  # ingress rule that allows Prometheus to scrape it.
+  enabled: true
+  port: 8080
+  serviceMonitor:
+    interval: 30s
+  # Namespace Prometheus (kube-prometheus-stack) runs in. Used by the
+  # NetworkPolicy/CiliumNetworkPolicy scrape-allow rules below to scope the
+  # allowed source to Prometheus's own namespace+pod label instead of
+  # allowing any pod cluster-wide onto the metrics port.
+  prometheusNamespace: "monitoring"
+
+networkPolicy:
+  # Escape hatch for clusters whose CNI doesn't enforce NetworkPolicy at all
+  # (e.g. plain Flannel without a policy controller). Doesn't change the
+  # policy content, just whether it's applied.
+  enabled: true
+
+ciliumNetworkPolicy:
+  # Opt-in Cilium-native equivalent of networkPolicy above, using
+  # `cilium.io/v2` CiliumNetworkPolicy instead of the standard
+  # `networking.k8s.io/v1` NetworkPolicy. Defaults to false (unlike
+  # networkPolicy.enabled above) because CiliumNetworkPolicy is a CRD: on a
+  # cluster that doesn't have Cilium installed (the common case, including
+  # the cluster this chart was developed against), applying an unknown CRD
+  # kind fails the install/upgrade outright rather than silently doing
+  # nothing. Only flip this on if Cilium is actually installed on the
+  # target cluster.
+  enabled: false
+
+keda:
+  # Opt-in KEDA ScaledObject autoscaling the webhook Deployment on CPU
+  # utilization OR the webhook's own admission-request-rate Prometheus
+  # metric (see templates/scaledobject.yaml). Defaults to false, same
+  # reasoning as ciliumNetworkPolicy.enabled above: ScaledObject is a CRD,
+  # and on a cluster that doesn't have KEDA installed, applying an
+  # unrecognized CRD kind fails the whole `helm install`/`upgrade` outright
+  # rather than silently no-op'ing. Only flip this on if KEDA is actually
+  # installed on the target cluster
+  # (--set keda.enabled=true).
+  enabled: false
+  # Floor above 0 - see the comment on minReplicaCount in
+  # templates/scaledobject.yaml for why zero replicas is unsafe here.
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  # Seconds between KEDA evaluating the triggers.
+  pollingInterval: 30
+  # Seconds to wait after the last trigger activity before scaling back
+  # down.
+  cooldownPeriod: 300
+  # CPU trigger threshold, percent utilization against
+  # resources.requests.cpu below.
+  cpuUtilization: 70
+  prometheus:
+    # PromQL query the Prometheus trigger evaluates. Overridable in case the
+    # rate window or aggregation needs tuning.
+    query: sum(rate(webhook_admission_requests_total[1m]))
+    # Threshold (as a string, per KEDA's schema) that triggers a scale-up
+    # once `query` exceeds it.
+    threshold: "5"
+
+nameOverride: ""
+fullnameOverride: ""

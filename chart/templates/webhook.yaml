@@ -1,0 +1,88 @@
+{{/*
+This single file generates the webhook's serving TLS material (self-signed
+CA + leaf cert, stored in a Secret) and the MutatingWebhookConfiguration
+that references it. Both resources are rendered from this one file so the
+CA bundle written into the webhook config always matches the cert/key
+written into the Secret in the same `helm template`/install/upgrade run —
+splitting cert generation and caBundle consumption across two independently
+rendered template files would risk generating two different random certs.
+
+On `helm upgrade`, `lookup` finds the existing Secret and its cert/key/CA
+are reused verbatim instead of being regenerated (which would otherwise
+invalidate the CA the API server already trusts). `lookup` returns an empty
+map under `helm template`/--dry-run (no live cluster), in which case we just
+generate an ephemeral cert for rendering purposes; that's fine because it
+only matters for enabling zero-downtime `helm upgrade` against a real
+cluster.
+*/}}
+{{- $fullname := include "ihpw.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $svcName := $fullname -}}
+{{- $secretName := include "ihpw.tlsSecretName" . -}}
+{{- $altNames := list (printf "%s.%s.svc" $svcName $ns) (printf "%s.%s.svc.cluster.local" $svcName $ns) -}}
+{{- $caCrtB64 := "" -}}
+{{- $tlsCrtB64 := "" -}}
+{{- $tlsKeyB64 := "" -}}
+{{- $existingSecret := lookup "v1" "Secret" $ns $secretName -}}
+{{- if and $existingSecret (index $existingSecret "data") }}
+{{- $caCrtB64 = index $existingSecret.data "ca.crt" -}}
+{{- $tlsCrtB64 = index $existingSecret.data "tls.crt" -}}
+{{- $tlsKeyB64 = index $existingSecret.data "tls.key" -}}
+{{- else -}}
+{{- $ca := genCA (printf "%s-ca" $fullname) 3650 -}}
+{{- $cert := genSignedCert $svcName (list) $altNames 3650 $ca -}}
+{{- $caCrtB64 = $ca.Cert | b64enc -}}
+{{- $tlsCrtB64 = $cert.Cert | b64enc -}}
+{{- $tlsKeyB64 = $cert.Key | b64enc -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $caCrtB64 }}
+  tls.crt: {{ $tlsCrtB64 }}
+  tls.key: {{ $tlsKeyB64 }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+webhooks:
+  - name: {{ printf "%s.%s.svc" $fullname $ns }}
+    clientConfig:
+      service:
+        name: {{ $svcName }}
+        namespace: {{ $ns }}
+        path: {{ .Values.webhook.path }}
+        port: {{ .Values.service.port }}
+      caBundle: {{ $caCrtB64 }}
+    rules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: {{ .Values.webhook.operations | toJson }}
+        resources: ["ingresses"]
+        scope: "Namespaced"
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    failurePolicy: {{ .Values.failurePolicy }}
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    # Never intercept kube-system (avoid interfering with core platform
+    # components) or the webhook's own namespace (avoid any chance of the
+    # webhook trying to mutate its own future resources / self-deadlock).
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - {{ $ns }}
+    objectSelector: {}

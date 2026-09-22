@@ -1,0 +1,36 @@
+# External Grafana CR: tells grafana-operator to manage dashboards/etc.
+# against kube-prometheus-stack's ALREADY-EXISTING Grafana instance/Service,
+# instead of having grafana-operator stand up its own Grafana deployment.
+#
+# ASSUMPTION (validator: confirm/adjust before applying): kube-prometheus-stack
+# is installed with Helm release name `kube-prometheus-stack` in namespace
+# `monitoring` (see monitoring/kube-prometheus-stack-values.yaml and the
+# install command in HANDOFF.md). That release name is what produces the
+# Service name `kube-prometheus-stack-grafana` (chart's fullname template:
+# `<release>-grafana`) and the Secret name `kube-prometheus-stack-grafana`
+# (chart's fullname template again: `<release>-grafana`) referenced below. If
+# the validator installs kube-prometheus-stack under a different release
+# name, both the `url` host and the `adminUser`/`adminPassword` secret `name`
+# fields below must be updated to match.
+#
+# No separate credentials Secret is created here on purpose: adminUser/
+# adminPassword are independent SecretKeySelector-style refs (name + key),
+# not a single credentialsSecretRef, so we just point both directly at
+# kube-prometheus-stack's own Grafana Secret and its existing
+# admin-user/admin-password keys.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: external-grafana
+  namespace: monitoring
+  labels:
+    dashboards: "grafana"
+spec:
+  external:
+    url: http://kube-prometheus-stack-grafana.monitoring.svc:80
+    adminUser:
+      name: kube-prometheus-stack-grafana
+      key: admin-user
+    adminPassword:
+      name: kube-prometheus-stack-grafana
+      key: admin-password

@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ihpw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ihpw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ihpw.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: webhook
+          image: "{{ .Values.image.repository }}:{{ include "ihpw.appVersion" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: HOST_PREFIX
+              value: {{ .Values.hostPrefix | quote }}
+            - name: LISTEN_ADDR
+              value: ":8443"
+            - name: TLS_CERT_FILE
+              value: /etc/webhook/tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /etc/webhook/tls/tls.key
+            - name: APP_VERSION
+              value: {{ include "ihpw.appVersion" . | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_LISTEN_ADDR
+              value: ":{{ .Values.metrics.port }}"
+            {{- end }}
+          ports:
+            - name: webhook
+              containerPort: 8443
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/webhook/tls
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ihpw.tlsSecretName" . }}

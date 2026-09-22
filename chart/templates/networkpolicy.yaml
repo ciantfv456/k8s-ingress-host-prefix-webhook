@@ -1,0 +1,55 @@
+{{- if .Values.networkPolicy.enabled }}
+# Least-privilege NetworkPolicy for the webhook pod.
+#
+# Ingress: allow only the webhook's HTTPS listen port (8443, see
+# containerPort in deployment.yaml / LISTEN_ADDR in webhook/main.go).
+# Deliberately no `from:` selector: in k3s the kube-apiserver runs as part
+# of the k3s server process, not as a pod with a pod-network IP, so there is
+# no podSelector/namespaceSelector that reliably matches "the apiserver".
+# Omitting `from` (as opposed to `from: []`) means "any source", so this
+# rule still restricts the pod to accepting connections only on its actual
+# webhook port.
+#
+# Egress: none at all. The webhook is a passive HTTPS callback server that
+# never makes outbound calls (no Kubernetes API calls, no external
+# dependencies), so declaring Egress in policyTypes with no egress rules
+# denies all outbound traffic by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ihpw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ihpw.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+    {{- if .Values.metrics.enabled }}
+    # Allow Prometheus (kube-prometheus-stack, running in
+    # metrics.prometheusNamespace) to scrape /metrics on metrics.port.
+    # namespaceSelector + podSelector in the SAME list item is deliberate:
+    # that's AND semantics (source pod must match both the namespace AND
+    # the prometheus pod label). Splitting them into two separate `from`
+    # list items would be OR semantics instead - far too permissive (any
+    # pod in that namespace, or any prometheus-labeled pod in any
+    # namespace).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.metrics.prometheusNamespace | default "monitoring" }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+    {{- end }}
+{{- end }}

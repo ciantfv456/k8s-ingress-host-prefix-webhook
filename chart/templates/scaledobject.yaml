@@ -1,0 +1,58 @@
+{{- if .Values.keda.enabled }}
+# Opt-in KEDA ScaledObject autoscaling the webhook Deployment on two
+# independent triggers (KEDA treats multiple triggers as OR - either one
+# alone can drive a scale-up):
+#   1. CPU utilization (classic resource-stress signal). Requires the
+#      container to have resources.requests.cpu set (see deployment.yaml /
+#      values.yaml `resources` - KEDA generates a standard HPA `Resource`
+#      metric under the hood for this trigger, same mechanism/requirement as
+#      a vanilla HPA).
+#   2. The webhook's own `webhook_admission_requests_total` Prometheus
+#      counter (exposed via metrics.enabled, see servicemonitor.yaml),
+#      queried directly against kube-prometheus-stack's Prometheus Service
+#      in metrics.prometheusNamespace - no RBAC/auth needed since that
+#      Service is unauthenticated in-cluster.
+#
+# KEDA creates its own HPA (keda-hpa-<name>) targeting the same Deployment;
+# no plain HorizontalPodAutoscaler exists in this chart, so there's no
+# conflict.
+#
+# Requires the KEDA CRDs/operator to already be installed on the target
+# cluster - see values.yaml `keda.enabled` for why this defaults to false.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "ihpw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    # Plain Deployment name - kind/apiVersion default to Deployment/apps/v1,
+    # no need to specify them. Reuses the same fullname helper the
+    # Deployment itself is named with (see deployment.yaml).
+    name: {{ include "ihpw.fullname" . }}
+  # KEDA defaults minReplicaCount to 0 if unset. Explicitly floored above 0
+  # here: this Deployment backs a MutatingWebhookConfiguration with
+  # failurePolicy: Ignore, so zero replicas would mean every matched
+  # admission silently passes through unmutated instead of erroring loudly.
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  triggers:
+    - type: cpu
+      # metricType is a TRIGGER-LEVEL field (sibling of type/metadata), NOT
+      # nested inside metadata.
+      metricType: Utilization
+      metadata:
+        value: {{ .Values.keda.cpuUtilization | quote }}
+    - type: prometheus
+      metadata:
+        # kube-prometheus-stack's Prometheus Service, reusing the same
+        # metrics.prometheusNamespace value the NetworkPolicy/
+        # CiliumNetworkPolicy scrape-allow rules already use.
+        serverAddress: http://kube-prometheus-stack-prometheus.{{ .Values.metrics.prometheusNamespace }}.svc:9090
+        query: {{ .Values.keda.prometheus.query | quote }}
+        threshold: {{ .Values.keda.prometheus.threshold | quote }}
+{{- end }}

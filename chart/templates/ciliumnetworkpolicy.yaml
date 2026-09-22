@@ -1,0 +1,62 @@
+{{- if .Values.ciliumNetworkPolicy.enabled }}
+# Optional Cilium-native equivalent of networkpolicy.yaml, for clusters that
+# run the Cilium CNI. Disabled by default (see values.yaml) because most
+# clusters — including the one this chart was developed against — do not
+# have Cilium installed, and `CiliumNetworkPolicy` is a CRD: applying it
+# against a cluster where Cilium (and therefore the CRD) isn't installed
+# fails outright rather than silently no-op'ing. This has NOT been verified
+# against a real Cilium installation (chart-authoring/template-only
+# validation); see HANDOFF.md for details.
+#
+# Ingress: same intent as networkpolicy.yaml (restrict to the webhook's
+# actual HTTPS port, allow the apiserver in without needing a podSelector
+# that could otherwise match it). Cilium provides a reserved `kube-apiserver`
+# entity specifically for this instead of relying on `from` being omitted.
+#
+# Egress: full deny-all. NOTE: in Cilium, `egress: []` (an empty list) is
+# NOT equivalent to a standard Kubernetes NetworkPolicy's "Egress in
+# policyTypes with no rules" — it means "no egress rule specified", which
+# Cilium treats as no restriction at all (i.e. egress stays allowed). The
+# correct default-deny-egress pattern is a single empty rule object,
+# `egress: [{}]`, which puts the endpoint into default-deny-at-egress mode
+# and then grants nothing (no toEndpoints/toCIDR/toEntities/toPorts/toFQDNs)
+# in that one rule. Do not "simplify" this to `egress: []` — that would
+# silently disable the deny-all-egress protection.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "ihpw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "ihpw.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    # Allow Prometheus (kube-prometheus-stack, running in
+    # metrics.prometheusNamespace) to scrape /metrics on metrics.port. The
+    # `k8s:io.kubernetes.pod.namespace` reserved label is REQUIRED here for
+    # cross-namespace matching in Cilium - without it, fromEndpoints
+    # implicitly scopes to this policy's own namespace and this rule would
+    # silently never match Prometheus running elsewhere. Port must be a
+    # quoted string per Cilium's CRD schema, same as the 8443 rule above.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.metrics.prometheusNamespace | default "monitoring" }}
+            k8s:app.kubernetes.io/name: prometheus
+      toPorts:
+        - ports:
+            - port: "{{ .Values.metrics.port }}"
+              protocol: TCP
+    {{- end }}
+  egress:
+    - {}
+{{- end }}

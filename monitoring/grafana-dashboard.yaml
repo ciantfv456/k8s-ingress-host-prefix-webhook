@@ -1,0 +1,162 @@
+# GrafanaDashboard CR: ships the webhook's dashboard JSON to grafana-operator,
+# which pushes it into the external Grafana referenced by grafana-instance.yaml
+# (matched via spec.instanceSelector.matchLabels, mirroring the Grafana CR's
+# own `dashboards: "grafana"` label).
+#
+# ASSUMPTIONS - flagged for the validator to double check once a live
+# Grafana is available to actually render this against:
+#
+# 1. job label value. All PromQL below filters on
+#    `job="ingress-host-prefix-webhook"`, relying on the Prometheus Operator's
+#    default behavior of setting the `job` label from the scraped Service's
+#    metadata.name for ServiceMonitor-discovered targets. That Service name
+#    was confirmed by rendering the chart (`helm template
+#    ingress-host-prefix-webhook ./chart`, release name == chart name, so
+#    `ihpw.fullname` collapses to just `ingress-host-prefix-webhook`, same
+#    reasoning already documented in the top-level HANDOFF.md). If the
+#    webhook is ever installed under a different release name, this job
+#    value (and thus every panel query here) must be updated to match, e.g.
+#    `<release>-ingress-host-prefix-webhook`.
+#
+# 2. Datasource wiring. Each panel/target references the datasource by the
+#    plain name string "Prometheus" (Grafana still resolves a datasource by
+#    name this way; this is NOT the grafana-operator `${DS_PROMETHEUS}` +
+#    spec.datasources input-substitution convention, which requires a
+#    matching GrafanaDatasource custom resource registered with the
+#    operator - one was deliberately not created here since
+#    grafana-instance.yaml points at kube-prometheus-stack's Grafana as an
+#    EXTERNAL instance that already self-provisions its own datasource
+#    (kube-prometheus-stack's grafana subchart default-provisions it under
+#    the name "Prometheus" via its own sidecar/ConfigMap mechanism,
+#    independent of grafana-operator). If the actual provisioned datasource
+#    in the target Grafana has a different display name, every
+#    `"datasource"` value below needs to be updated to match (or a
+#    GrafanaDatasource CR + the operator's input-substitution mechanism
+#    adopted instead). Treat panels rendering "no data"/a datasource error
+#    as the first thing to check here.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: ingress-host-prefix-webhook
+  namespace: monitoring
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: "grafana"
+  resyncPeriod: 30s
+  json: |
+    {
+      "id": null,
+      "uid": "ingress-host-prefix-webhook",
+      "title": "ingress-host-prefix-webhook",
+      "description": "Memory, CPU, admission request rate, and running build version for the ingress-host-prefix-webhook mutating admission webhook.",
+      "tags": ["ingress-host-prefix-webhook"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Memory usage (RSS)",
+          "description": "process_resident_memory_bytes for the webhook pod(s), from the process collector auto-registered on the default Prometheus registry.",
+          "datasource": "Prometheus",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": "Prometheus",
+              "expr": "process_resident_memory_bytes{job=\"ingress-host-prefix-webhook\"}",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "CPU usage",
+          "description": "Per-second rate of process_cpu_seconds_total for the webhook pod(s), from the process collector auto-registered on the default Prometheus registry.",
+          "datasource": "Prometheus",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": "Prometheus",
+              "expr": "rate(process_cpu_seconds_total{job=\"ingress-host-prefix-webhook\"}[5m])",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Admission request rate by outcome",
+          "description": "sum(rate(webhook_admission_requests_total[5m])) by (outcome) - the mutated/unmutated/error breakdown of /mutate requests handled.",
+          "datasource": "Prometheus",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": "Prometheus",
+              "expr": "sum(rate(webhook_admission_requests_total[5m])) by (outcome)",
+              "legendFormat": "{{outcome}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Running version",
+          "description": "webhook_build_info{version=...} - value is always 1, the version label is the thing displayed here (via legendFormat, not the numeric value).",
+          "datasource": "Prometheus",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "options": {
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            },
+            "textMode": "name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": "Prometheus",
+              "expr": "webhook_build_info",
+              "instant": true,
+              "legendFormat": "{{version}}"
+            }
+          ]
+        }
+      ]
+    }

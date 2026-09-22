@@ -1,0 +1,23 @@
+{{- if .Values.metrics.enabled }}
+# Tells the Prometheus Operator (installed as part of kube-prometheus-stack,
+# see ../../monitoring/) to scrape this webhook's /metrics endpoint. Selects
+# the webhook's own Service (see service.yaml) via the same selector labels
+# used everywhere else in this chart, and targets the Service's named
+# "metrics" port (not a raw port number) so it stays correct if
+# metrics.port is ever changed.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ihpw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ihpw.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ihpw.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

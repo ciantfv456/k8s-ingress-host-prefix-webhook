@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ingress-host-prefix-webhook
+description: Mutating admission webhook that adds a prefixed duplicate host rule to every Ingress
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
